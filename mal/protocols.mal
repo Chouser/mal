@@ -25,16 +25,17 @@
      (def! ~proto-name (atom {}))
      ~@(map (fn* [m]
               (let* [name (first m), sig (first (rest m))]
-                `(def! ~name (fn* [this# & args#]
-                   (apply (get (find-protocol-methods ~proto-name this#)
+                `(def! ~name (fn* [this-FIXME & args-FIXME]
+                   (apply (get (find-protocol-methods ~proto-name this-FIXME)
                                ~(keyword (str name)))
-                          this# args#)))))
+                          this-FIXME args-FIXME)))))
             methods))))
 
 (def! extend (fn* [type proto methods & more]
-  (swap! proto assoc type methods)
-  (if (first more)
-    (apply extend type more))))
+  (do
+    (swap! proto assoc type methods)
+    (if (first more)
+      (apply extend type more)))))
 
 ;;----
 ;; Example:
