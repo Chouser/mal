@@ -1,0 +1,32 @@
+;; Basic interop
+(. 5 'MalInt.)
+;=>5
+(. 11 31 '+ 'MalInt.)
+;=>42
+(. "greetings" 'MalString.)
+;=>"greetings"
+(. "hello" 'type 'cr 'mal-nil)
+; hello
+;=>nil
+
+;; Interop on non-literals
+(. (+ 15 27) 'MalInt.)
+;=>42
+(let* [a 17] (. a 25 '+ 'MalInt.))
+;=>42
+(let* [a "hello"] (. a 1 '- 'MalString.))
+;=>"hell"
+
+;; Use of annoyingly-named forth words
+(. 1 'MalInt. (symbol ",") 'here (symbol "@"))
+;=>1
+
+;;; Why don't these work?
+;;; (let (i 'MalInt.) (. 5 i))
+;;; ;=>5
+;;; (let (save (symbol ",")) (. 1 'MalInt. save 'here (symbol "@")))
+;;; ;=>1
+;;; (let (save (symbol ",") fetch (symbol "@")) (. 1 'MalInt. save 'here fetch))
+;;; ;=>1
+;;; (let (old-here (. 'here)) (do (map (fn* (x) (. x (symbol ",") 'mal-nil)) (list 5 10 42)) (. 'here>MalList)))
+;;; ;=>(5 10 42)
