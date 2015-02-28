@@ -10,7 +10,7 @@ def-protocol-method pr-seq-buf ( readably? str-addr str-len this -- str-addr str
     true new-str obj pr-buf rot drop ;
 
 \ Examples of extending existing protocol methods to existing type
-MalDefault
+default-type-id
   extend pr-buf
     { this }
     s" #<" str-append

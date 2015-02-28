@@ -113,8 +113,6 @@ end-struct MalTypeType%
     swap MalTypeType-name-len @ ( name-addr name-len )
     ;
 
-MalType% deftype MalDefault
-
 \ nil type and instance to support extending protocols to it
 MalType% deftype MalNil   MalNil   new constant mal-nil
 MalType% deftype MalTrue  MalTrue  new constant mal-true
@@ -133,115 +131,144 @@ MalType% deftype MalFalse MalFalse new constant mal-false
 \ === protocol methods === /
 
 struct
-    cell% field call-site/type
-    cell% field call-site/xt
-end-struct call-site%
+    cell% field proto-impl/count      \ number of types impl'd for this method
+    cell% field proto-impl/types      \ array of types (keys)
+    cell% field proto-impl/xts        \ array of implementation xts (vals)
+    cell% field proto-impl/default-xt \ xt of impl to use when no matching type
+    cell% field proto-impl/nt         \ name token of this protocol method
+end-struct proto-impls%
 
-\ Used by protocol methods to find the appropriate implementation of
-\ themselves for the given object, and then execute that implementation.
-: execute-method { obj pxt call-site -- }
-  obj not-object? if
-      0 0 obj int>str s" ' on non-object: " pxt >name name>string
-      s" Refusing to invoke protocol fn '" ...throw-str
-  endif
-  \ ." Calling '" pxt >name name>string type ." ' on " obj mal-type @ type-name type ." , cs " call-site .
+: illegal-proto-impl ." illegal-proto-impl: this should never happen" cr ;
+-1 constant illegal-type-id
+-2 constant default-type-id
 
-  obj mal-type @ ( type )
-  dup call-site call-site/type @ = if
-      \ ." hit!" cr
-      drop
-      call-site call-site/xt @
-  else
-      \ ." miss!" cr
-      dup MalTypeType-methods 2@ swap ( type methods method-keys )
-      dup 0= if \ No protocols extended to this type; check for a default
-          2drop drop MalDefault MalTypeType-methods 2@ swap
-      endif
+: .src-info space ." file: " sourcefilename safe-type space ." line " sourceline# . ;
+: .impl-method-name ( impls ) proto-impl/nt @ name>string safe-type ;
+: prev-literal-addr here cell - ;
 
-      pxt array-find ( type idx found? )
-      dup 0= if \ No implementation found for this method; check for a default
-          2drop drop MalDefault dup MalTypeType-methods 2@ swap
-          pxt array-find ( type idx found? )
-      endif
-      0= if ( type idx )
-          2drop
-          0 0 s" '" obj mal-type @ type-name s" ' extended to type '"
-          pxt >name name>string s" No protocol fn '" ...throw-str
-      endif
+: get-type ( ... obj -- ... obj type-num )
+   mal-type @ ;
 
-      cells over MalTypeType-method-vals @ + @ ( type xt )
-      swap call-site call-site/type ! ( xt )
-      dup call-site call-site/xt ! ( xt )
-  endif
-  obj swap execute ;
+: proto-cache-miss ( ... obj impls cached-type-addr cached-xt-addr -- rtn-vals... )
+    { obj impls cached-type-addr cached-xt-addr }
+    impls proto-impl/count @
+    impls proto-impl/types @
+    obj get-type dup { type-id } ( count types type-id )
+    array-find { idx found? }
+    found? if
+        impls proto-impl/xts @ idx cells + @
+    else
+        \ method not extended to this obj's type. try default
+        impls proto-impl/default-xt @ dup 0= if ( xt )
+          0 0 s" '" type-id type-name s" ' extended to type '"
+          impls proto-impl/nt @ name>string s" No protocol fn '" ...throw-str
+        endif
+    endif ( xt )
 
-\ Extend a type with a protocol method. This mutates the MalTypeType
-\ object that represents the MalType being extended.
-: extend-method* { type pxt ixt -- type }
-  \ ." Extend '" pxt dup . >name name>string safe-type ." ' to " type type-name safe-type ." , "
-  \ type MalTypeType-methods 2@ ( method-keys methods )
-  \   0 ?do
-  \       dup i cells + @ >name name>string safe-type ." , "
-  \       \ dup i cells + @ .
-  \   loop
-  \   drop cr
+    dup cached-xt-addr !
+    type-id cached-type-addr !
+    obj swap execute ;
 
-  type MalTypeType-methods 2@ swap ( methods method-keys )
-  dup 0= if \ no protocols extended to this type
-    2drop
-    1 type MalTypeType-methods !
-    pxt new-array type MalTypeType-method-keys !
-    ixt new-array type MalTypeType-method-vals !
-  else
-    pxt array-find { idx found? }
-    found? if \ overwrite
-      ." Warning: overwriting protocol method implementation '"
-        pxt >name name>string safe-type ." ' on " type type-name safe-type ." , " idx . found? . cr
+\ Compile a call-site for a protocol method
+: make-call-site { impls }
+    \ user-definable word to get a type id from an instance:
+    postpone dup postpone get-type
 
-      type MalTypeType-method-vals @ idx cells + ixt !
-    else \ resize
-      type MalTypeType-methods dup @ 1+ dup rot ! ( new-count )
-      1- dup type MalTypeType-method-keys @ idx pxt array-insert ( old-count new-array )
-        type MalTypeType-method-keys ! ( old-count )
-      type MalTypeType-method-vals @ idx ixt array-insert ( new-array )
-        type MalTypeType-method-vals !
+    \ push cached type-id onto data stack
+    illegal-type-id postpone literal
+    prev-literal-addr { cached-type }
+
+    \ if instance's type-id equals cached type-id, go to fast path
+    postpone = postpone if
+      \ push cached method implementation and execute it
+      ['] illegal-proto-impl postpone literal
+      prev-literal-addr { cached-xt } \ TODO: consider compilation token, skip the execute?
+      postpone execute
+    postpone else
+      \ cache miss. get pointers to everything relevant, push them, and call proto-cache-miss
+      impls postpone literal
+      cached-type postpone literal
+      cached-xt postpone literal
+      postpone proto-cache-miss
+    postpone endif ;
+
+\ Build a new string with "-impls" appended
+: pad-append { addr1 len1 addr2 len2 -- pad len }
+    addr1 pad len1 cmove
+    addr2 pad len1 + len1 len2 + cmove
+    pad len1 len2 + ;
+
+\ Define a new named protocol method
+: def-proto-str { base-addr base-len }
+    \ Allot a pointer to the type-xt-map, name it with "-impls" suffix
+    base-addr base-len s" -impls" pad-append nextname create
+    here  proto-impls% %allot { impls }
+    impls proto-impls% nip erase
+    \ Define <method>-int
+    base-addr base-len s" -int" pad-append 2dup nextname
+    : 99 postpone literal postpone ;  \ TODO
+    find-name name>int ( int-xt )
+    \ Define <method>-comp
+    base-addr base-len s" -comp" pad-append 2dup nextname
+    : impls postpone literal postpone make-call-site postpone ;
+    find-name name>int ( int-xt comp-xt )
+    \ Define combined word <method>
+    base-addr base-len nextname interpret/compile:
+    \ Store protocol method name
+    base-addr base-len find-name impls proto-impl/nt ! ;
+
+: def-protocol-method parse-name def-proto-str ;
+
+\ Extend a type with a protocol method. This mutates the proto-impls
+\ for the given method
+: extend-method* { type-id impls ixt -- type-id }
+    \ ." Extend '" impls .impl-method-name ." ' to " type-id type-name safe-type .src-info space impls . cr
+    \ ." , "
+    \ type MalTypeType-methods 2@ ( method-keys methods )
+    \ 0 ?do
+    \     dup i cells + @ >name name>string safe-type ." , "
+    \     \ dup i cells + @ .
+    \ loop
+    \ drop cr
+    type-id default-type-id = if
+        impls proto-impl/default-xt @ 0<> if
+            ." Warning: overwriting protocol default impl for method "
+            impls .impl-method-name .src-info cr
+        endif
+        ixt impls proto-impl/default-xt !
+    else
+        impls proto-impl/count @ 0= if
+            1 impls proto-impl/count !
+            type-id new-array impls proto-impl/types !
+            ixt new-array impls proto-impl/xts  !
+        else
+            impls proto-impl/count @ { old-count }
+            old-count impls proto-impl/types @ type-id array-find { idx found? }
+            found? if \ overwrite
+                ." Warning: overwriting protocol method '" impls .impl-method-name
+                ." ' impl on type-id " type-id . .src-info cr
+                impls proto-impl/xts @ idx cells + ixt !
+            else \ resize
+                impls proto-impl/count @ 1+ { new-count }
+                new-count impls proto-impl/count !
+                old-count impls proto-impl/types @ idx type-id array-insert
+                impls proto-impl/types !
+                old-count impls proto-impl/xts   @ idx ixt     array-insert
+                impls proto-impl/xts !
+            endif
+        endif
     endif
-  endif
-  type
-  ;
+    type-id ;
 
-
-\ Define a new protocol function.  For example:
-\   def-protocol-method pr-str
-\ When called as above, defines a new word 'pr-str' and stores there its
-\ own xt (known as pxt). When a usage of pr-str is compiled, it
-\ allocates a call-site object on the heap and injects a reference to
-\ both that and the pxt into the compilation, along with a call to
-\ execute-method. Thus when pr-str runs, execute-method can check the
-\ call-site object to see if the type of the target object is the same
-\ as the last call for this site. If so, it executes the implementation
-\ immediately. Otherwise, it searches the target type's method list and
-\ if necessary MalDefault's method list. If an implementation of pxt is
-\ found, it is cached in the call-site, and then executed.
-: make-call-site { pxt -- }
-    pxt postpone literal \ transfer pxt into call site
-    call-site% %allocate throw dup postpone literal \ allocate call-site, push reference
-    \ dup ." Make cs '" pxt >name name>string type ." ' " . cr
-    0 swap call-site/type !
-    postpone execute-method ;
-
-: def-protocol-method ( parse: name -- )
-    : latestxt postpone literal postpone make-call-site postpone ; immediate
-    ;
-
-: extend ( type -- type pxt install-xt <noname...>)
-    parse-name find-name name>int ( type pxt )
+: extend ( type-id -- type-id pxt install-xt <noname...>)
+    parse-name s" -impls" pad-append find-name ( type-id nt )
+    name>int ( type-id xt ) \ xt is interpretations semantics
+    execute ( type-id <method>-impls )
     ['] extend-method*
-    :noname
-    ;
+    :noname ;
 
-: ;; ( type pxt <noname...> -- type )
-    [compile] ; ( type pxt install-xt ixt )
+: ;; ( compile-time-xt <noname...> -- type )
+    [compile] ; ( compile-time-xt run-time-xt )
     swap execute
     ; immediate
 
@@ -252,7 +279,7 @@ protocol IPrintable
 end-protocol
 
 MalList IPrintable extend
-  ' pr-str :noname drop s" <unprintable>" ; extend-method*
+  pr-str-impls :noname drop s" <unprintable>" ; extend-method*
 
   extend-method pr-str
     drop s" <unprintable>" ;;
@@ -487,7 +514,7 @@ MalMap
 drop
 
 \ Examples of extending existing protocol methods to existing type
-MalDefault
+default-type-id
   extend conj   ( obj this -- this )
     nip ;;
   extend to-list drop 0 ;;
@@ -555,7 +582,7 @@ MalKeyword
     else
         2drop 0
     endif ;;
-  ' as-native ' unpack-keyword extend-method*
+  as-native-impls ' unpack-keyword extend-method*
 drop
 
 : MalKeyword. { str-addr str-len -- mal-keyword }
@@ -587,7 +614,7 @@ MalString
     else
         2drop 0
     endif ;;
-  ' as-native ' unpack-str extend-method*
+  as-native-impls ' unpack-str extend-method*
 drop
 
 

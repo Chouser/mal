@@ -64,7 +64,9 @@ defer MalString.
     while
         str-append
     repeat
-    2drop MalString. ;
+    2drop
+    2dup type ~~ \ debug line
+    MalString. ;
 
 nil value exception-object
 

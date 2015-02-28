@@ -19,7 +19,7 @@ core MalEnv. constant repl-env
     \ ." Type: " dup mal-type @ type-name safe-type cr
     pr-str ;
 
-MalDefault extend mal-eval nip ;; drop \ By default, evalutate to yourself
+default-type-id extend mal-eval nip ;; drop \ By default, evalutate to yourself
 
 MalKeyword
   extend eval-invoke { env list kw -- val }
