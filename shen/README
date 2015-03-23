@@ -1,0 +1,5 @@
+I didn't successfully install shen the "right way", but perhaps you
+can adjust 'run-shen' to work on your machine. It works on mine, using
+shen-ruby cloned from github:
+
+./run-shen step0_repl.shen

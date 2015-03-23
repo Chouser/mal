@@ -1,0 +1,3 @@
+#!/bin/bash
+
+exec ruby -I ~/repos/shen-ruby/lib ~/repos/shen-ruby/bin/shen-ruby "$@"
